@@ -16,7 +16,7 @@ MODEL_PATH = os.path.join(BASE_DIR, "../AI Engine/landslide_model.pkl")
 HEADER = ["timestamp", "accel_x", "accel_y", "accel_z", "gyro_x", "gyro_y", "gyro_z", "soil_moisture", "label"]
 SAMPLES_PER_CLASS = 2500
 
-# NOTE UNTUK DEVI: 
+# NOTE UNTUK DEVI:
 # Saat ini kita masih pakai Random Forest untuk prototype agar sistem jalan.
 # Nanti framework LSTM-SOS bisa lu kembangkan menggantikan logic Classifier di bawah ini.
 
