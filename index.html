@@ -1,0 +1,208 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ILMAS - Dashboard EWS</title>
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Chart.js -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <!-- Paho MQTT via WebSockets -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/paho-mqtt/1.0.1/mqttws31.min.js"></script>
+</head>
+<body class="bg-gray-100 font-sans antialiased text-gray-800">
+
+    <!-- Navbar -->
+    <nav class="bg-blue-900 text-white p-4 shadow-lg">
+        <div class="container mx-auto flex justify-between items-center">
+            <h1 class="text-2xl font-bold tracking-wider">ILMAS Dashboard</h1>
+            <div id="connection-status" class="bg-yellow-500 text-black px-3 py-1 rounded-full text-sm font-semibold animate-pulse">
+                Menghubungkan ke MQTT...
+            </div>
+        </div>
+    </nav>
+
+    <!-- Main Content -->
+    <div class="container mx-auto p-6 mt-4">
+        
+        <!-- Status Bar -->
+        <div class="bg-white rounded-lg shadow-md p-6 mb-6 flex items-center justify-between border-l-8 border-green-500" id="ai-status-card">
+            <div>
+                <h2 class="text-gray-500 text-sm font-bold uppercase">Status Prediksi AI (LSTM-SOS)</h2>
+                <p class="text-3xl font-black text-green-600 mt-1" id="ai-status-text">AMAN</p>
+            </div>
+            <div class="text-right">
+                <p class="text-gray-500 text-sm">Update Terakhir</p>
+                <p class="font-mono font-bold" id="last-update">--:--:--</p>
+            </div>
+        </div>
+
+        <!-- Cards Data -->
+        <div class="grid grid-cols-1 md:grid-cols-3 gap-6 mb-6">
+            <div class="bg-white rounded-lg shadow-md p-6">
+                <h3 class="text-gray-500 text-sm font-bold">Kelembaban Tanah (Moisture)</h3>
+                <p class="text-4xl font-bold text-blue-600 mt-2"><span id="val-moisture">0</span>%</p>
+            </div>
+            <div class="bg-white rounded-lg shadow-md p-6">
+                <h3 class="text-gray-500 text-sm font-bold">Akselerasi MPU6050 (X, Y, Z)</h3>
+                <p class="text-lg font-mono font-bold text-gray-700 mt-2">X: <span id="val-ax">0</span></p>
+                <p class="text-lg font-mono font-bold text-gray-700">Y: <span id="val-ay">0</span></p>
+                <p class="text-lg font-mono font-bold text-gray-700">Z: <span id="val-az">0</span></p>
+            </div>
+            <div class="bg-white rounded-lg shadow-md p-6">
+                <h3 class="text-gray-500 text-sm font-bold">Rotasi Gyro (X, Y, Z)</h3>
+                <p class="text-lg font-mono font-bold text-gray-700 mt-2">X: <span id="val-gx">0</span></p>
+                <p class="text-lg font-mono font-bold text-gray-700">Y: <span id="val-gy">0</span></p>
+                <p class="text-lg font-mono font-bold text-gray-700">Z: <span id="val-gz">0</span></p>
+            </div>
+        </div>
+
+        <!-- Charts Grid -->
+        <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+            <div class="bg-white rounded-lg shadow-md p-4">
+                <h3 class="text-center font-bold text-gray-700 mb-2">Grafik Kelembaban Tanah</h3>
+                <canvas id="moistureChart" height="200"></canvas>
+            </div>
+            <div class="bg-white rounded-lg shadow-md p-4">
+                <h3 class="text-center font-bold text-gray-700 mb-2">Grafik Akselerasi (Getaran)</h3>
+                <canvas id="accelChart" height="200"></canvas>
+            </div>
+        </div>
+    </div>
+
+    <!-- JavaScript Logic -->
+    <script>
+        // Setup Chart.js
+        const maxDataPoints = 20; // Maksimal titik di grafik biar ga berat
+        
+        const ctxMoisture = document.getElementById('moistureChart').getContext('2d');
+        const moistureChart = new Chart(ctxMoisture, {
+            type: 'line',
+            data: {
+                labels: [],
+                datasets: [{ label: 'Moisture (%)', borderColor: '#2563eb', backgroundColor: 'rgba(37, 99, 235, 0.2)', data: [], fill: true, tension: 0.4 }]
+            },
+            options: { responsive: true, animation: false, scales: { y: { min: 0, max: 100 } } }
+        });
+
+        const ctxAccel = document.getElementById('accelChart').getContext('2d');
+        const accelChart = new Chart(ctxAccel, {
+            type: 'line',
+            data: {
+                labels: [],
+                datasets: [
+                    { label: 'Accel X', borderColor: '#ef4444', data: [], tension: 0.4 },
+                    { label: 'Accel Y', borderColor: '#22c55e', data: [], tension: 0.4 },
+                    { label: 'Accel Z', borderColor: '#f59e0b', data: [], tension: 0.4 }
+                ]
+            },
+            options: { responsive: true, animation: false }
+        });
+
+        // Setup MQTT WebSockets
+        const mqttBroker = "broker.hivemq.com";
+        const mqttPort = 8000; // Port WebSocket HiveMQ Public
+        const clientID = "ILMAS_Web_" + parseInt(Math.random() * 1000, 10);
+        
+        const client = new Paho.MQTT.Client(mqttBroker, mqttPort, "/mqtt", clientID);
+
+        client.onConnectionLost = onConnectionLost;
+        client.onMessageArrived = onMessageArrived;
+
+        // Connect ke MQTT
+        client.connect({
+            onSuccess: onConnect,
+            useSSL: false // HiveMQ public ws port 8000 is non-SSL
+        });
+
+        function onConnect() {
+            const statusBadge = document.getElementById("connection-status");
+            statusBadge.classList.replace("bg-yellow-500", "bg-green-500");
+            statusBadge.classList.remove("animate-pulse");
+            statusBadge.innerText = "MQTT Terhubung";
+            
+            // Subscribe ke topik sensor dan actuator
+            client.subscribe("sensor/landslide/data");
+            client.subscribe("sensor/landslide/actuator");
+        }
+
+        function onConnectionLost(responseObject) {
+            if (responseObject.errorCode !== 0) {
+                const statusBadge = document.getElementById("connection-status");
+                statusBadge.classList.replace("bg-green-500", "bg-red-500");
+                statusBadge.innerText = "MQTT Terputus!";
+            }
+        }
+
+        function onMessageArrived(message) {
+            const topic = message.destinationName;
+            const payload = message.payloadString;
+            const now = new Date().toLocaleTimeString();
+
+            document.getElementById("last-update").innerText = now;
+
+            if (topic === "sensor/landslide/data") {
+                try {
+                    const data = JSON.parse(payload);
+                    
+                    // Update Angka di Card
+                    document.getElementById("val-moisture").innerText = data.soil_moisture.toFixed(1);
+                    document.getElementById("val-ax").innerText = data.accel.x.toFixed(2);
+                    document.getElementById("val-ay").innerText = data.accel.y.toFixed(2);
+                    document.getElementById("val-az").innerText = data.accel.z.toFixed(2);
+                    document.getElementById("val-gx").innerText = data.gyro.x.toFixed(2);
+                    document.getElementById("val-gy").innerText = data.gyro.y.toFixed(2);
+                    document.getElementById("val-gz").innerText = data.gyro.z.toFixed(2);
+
+                    // Update Grafik Kelembaban
+                    if (moistureChart.data.labels.length > maxDataPoints) {
+                        moistureChart.data.labels.shift();
+                        moistureChart.data.datasets[0].data.shift();
+                    }
+                    moistureChart.data.labels.push(now);
+                    moistureChart.data.datasets[0].data.push(data.soil_moisture);
+                    moistureChart.update();
+
+                    // Update Grafik Akselerasi
+                    if (accelChart.data.labels.length > maxDataPoints) {
+                        accelChart.data.labels.shift();
+                        accelChart.data.datasets.forEach(ds => ds.data.shift());
+                    }
+                    accelChart.data.labels.push(now);
+                    accelChart.data.datasets[0].data.push(data.accel.x);
+                    accelChart.data.datasets[1].data.push(data.accel.y);
+                    accelChart.data.datasets[2].data.push(data.accel.z);
+                    accelChart.update();
+
+                } catch (e) {
+                    console.log("Error parsing JSON data", e);
+                }
+            } 
+            else if (topic === "sensor/landslide/actuator") {
+                try {
+                    const data = JSON.parse(payload);
+                    const aiCard = document.getElementById("ai-status-card");
+                    const aiText = document.getElementById("ai-status-text");
+
+                    if (data.sirine === "ON") {
+                        // Ubah UI jadi mode BAHAYA (Merah dan berkedip)
+                        aiCard.classList.replace("border-green-500", "border-red-600");
+                        aiCard.classList.add("bg-red-50", "animate-pulse");
+                        aiText.classList.replace("text-green-600", "text-red-600");
+                        aiText.innerText = "🚨 BAHAYA LONGSOR 🚨";
+                    } else {
+                        // Ubah UI kembali ke mode AMAN (Hijau)
+                        aiCard.classList.replace("border-red-600", "border-green-500");
+                        aiCard.classList.remove("bg-red-50", "animate-pulse");
+                        aiText.classList.replace("text-red-600", "text-green-600");
+                        aiText.innerText = "AMAN";
+                    }
+                } catch (e) {
+                    console.log("Error parsing Actuator data", e);
+                }
+            }
+        }
+    </script>
+</body>
+</html>
