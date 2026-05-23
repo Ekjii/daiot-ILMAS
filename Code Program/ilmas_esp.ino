@@ -92,7 +92,7 @@ void loop() {
 
 
   int moisture = analogRead(soilPin);
-  float moisture_percent = map(moisture, 0, 4095, 0, 100);
+  float moisture_percent = map(moisture, 4095, 0, 0, 100);
 
   //Mpu6050
   Wire.beginTransmission(MPU_ADDR);
